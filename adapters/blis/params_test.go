@@ -5,32 +5,57 @@ import (
 	"testing"
 
 	"github.com/prebid/prebid-server/v3/openrtb_ext"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestValidParams(t *testing.T) {
-	validator, err := openrtb_ext.NewBidderParamsValidator("../../static/bidder-params")
-	if err != nil {
-		t.Fatalf("Failed to fetch the json schema. %v", err)
-	}
+type testSpec struct {
+	name    string
+	json    string
+	wantErr bool
+}
 
-	for _, p := range validParams {
-		if err := validator.Validate(openrtb_ext.BidderBlis, json.RawMessage(p)); err != nil {
-			t.Errorf("Schema rejected valid params: %s", p)
-		}
+func testParams(t *testing.T, specs []testSpec) {
+	validator, err := openrtb_ext.NewBidderParamsValidator("../../static/bidder-params")
+	require.NoError(t, err, "Failed to fetch the json schema")
+	for _, spec := range specs {
+		t.Run(spec.name, func(t *testing.T) {
+			if spec.wantErr {
+				assert.Error(t, validator.Validate(openrtb_ext.BidderBlis, json.RawMessage(spec.json)))
+			} else {
+				assert.NoError(t, validator.Validate(openrtb_ext.BidderBlis, json.RawMessage(spec.json)))
+			}
+		})
 	}
 }
 
-func TestInvalidParams(t *testing.T) {
-	validator, err := openrtb_ext.NewBidderParamsValidator("../../static/bidder-params")
-	if err != nil {
-		t.Fatalf("Failed to fetch the json schema. %v", err)
-	}
+func TestValidParams(t *testing.T) {
+	testParams(t, []testSpec{
+		{
+			name: "Valid params with spid",
+			json: `{"spid": "9999"}`,
+		},
+	})
+}
 
-	for _, p := range invalidParams {
-		if err := validator.Validate(openrtb_ext.BidderBlis, json.RawMessage(p)); err == nil {
-			t.Errorf("Schema allowed invalid params: %s", p)
-		}
-	}
+func TestInvalidParams(t *testing.T) {
+	testParams(t, []testSpec{
+		{
+			name:    "Empty params",
+			json:    `{}`,
+			wantErr: true,
+		},
+		{
+			name:    "Empty spid",
+			json:    `{"spid": ""}`,
+			wantErr: true,
+		},
+		{
+			name:    "Invalid spid type",
+			json:    `{"spid": 9999}`,
+			wantErr: true,
+		},
+	})
 }
 
 var validParams = []string{
