@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -303,29 +305,19 @@ func (m *Module) HandleAuctionResponseHook(
 
 			// Add segments as individual targeting keys for GAM integration
 			if m.cfg.AddToTargeting {
-				if prebidMap, ok := extMap["prebid"].(map[string]interface{}); ok {
-					if targetingMap, ok := prebidMap["targeting"].(map[string]interface{}); ok {
-						// Add each segment as individual targeting key
-						for _, segment := range segments {
-							targetingMap[segment] = "true"
-						}
-					} else {
-						// Create targeting map with individual segment keys
-						newTargeting := make(map[string]interface{})
-						for _, segment := range segments {
-							newTargeting[segment] = "true"
-						}
-						prebidMap["targeting"] = newTargeting
-					}
-				} else {
-					// Create prebid map with targeting
-					newTargeting := make(map[string]interface{})
-					for _, segment := range segments {
-						newTargeting[segment] = "true"
-					}
-					extMap["prebid"] = map[string]interface{}{
-						"targeting": newTargeting,
-					}
+				prebidMap, ok := extMap["prebid"].(map[string]interface{})
+				if !ok {
+					prebidMap = make(map[string]interface{})
+					extMap["prebid"] = prebidMap
+				}
+				targetingMap, ok := prebidMap["targeting"].(map[string]interface{})
+				if !ok {
+					targetingMap = make(map[string]interface{})
+					prebidMap["targeting"] = targetingMap
+				}
+				// Add each segment as individual targeting key
+				for _, segment := range segments {
+					targetingMap[segment] = "true"
 				}
 			}
 
@@ -402,26 +394,23 @@ func (m *Module) fetchScope3Segments(ctx context.Context, bidRequest *openrtb2.B
 	}
 
 	// Extract unique segments (exclude destination)
-	segmentMap := make(map[string]struct{})
+	segmentMap := make(map[string]bool)
 	for _, data := range scope3Resp.Data {
 		// Extract actual segments from impression-level data
 		for imp := range iterutil.SlicePointerValues(data.Imp) {
 			if imp.Ext != nil && imp.Ext.Scope3 != nil {
 				for _, segment := range (*imp).Ext.Scope3.Segments {
-					segmentMap[segment.ID] = struct{}{}
+					segmentMap[segment.ID] = true
 				}
 			}
 		}
 	}
 
 	// Convert to slice
-	segments := make([]string, 0, len(segmentMap))
-	for segment := range segmentMap {
-		segments = append(segments, segment)
-	}
+	segments := slices.AppendSeq(make([]string, 0, len(segmentMap)), maps.Keys(segmentMap))
 
 	// Cache the result
-	m.cache.Set(cacheKey, []byte(strings.Join(segments, ",")), m.cfg.CacheTTL)
+	_ = m.cache.Set(cacheKey, []byte(strings.Join(segments, ",")), m.cfg.CacheTTL)
 
 	return segments, nil
 }
