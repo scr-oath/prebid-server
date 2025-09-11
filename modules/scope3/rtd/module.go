@@ -66,14 +66,9 @@ func Builder(config json.RawMessage, deps moduledeps.ModuleDeps) (interface{}, e
 		}
 	}
 
-	// Create HTTP client with optimized transport for high-frequency API calls
-	transport := &http.Transport{
-		MaxIdleConns:        100,              // Allow more idle connections for connection reuse
-		MaxIdleConnsPerHost: 10,               // Allow multiple connections per host
-		IdleConnTimeout:     90 * time.Second, // Keep connections alive longer
-		DisableCompression:  false,            // Enable compression to reduce bandwidth
-		ForceAttemptHTTP2:   true,             // Use HTTP/2 when possible for better performance
-	}
+	// Use the same HTTP transport as Prebid Server so that it's configured correctly by the host and so that we can
+	// Add a timeout on the client.
+	transport := deps.HTTPClient.Transport
 
 	return &Module{
 		cfg: cfg,
