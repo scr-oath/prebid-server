@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/coocood/freecache"
@@ -22,6 +21,47 @@ import (
 	"github.com/prebid/prebid-server/v3/modules/moduledeps"
 	"github.com/prebid/prebid-server/v3/util/iterutil"
 	"github.com/prebid/prebid-server/v3/util/jsonutil"
+)
+
+const (
+	// keys for miCtx
+	asyncRequestKey = "scope3.AsyncRequest"
+)
+
+var (
+	// Declare hooks
+	_ hookstage.Entrypoint        = (*Module)(nil)
+	_ hookstage.RawAuctionRequest = (*Module)(nil)
+	_ hookstage.AuctionResponse   = (*Module)(nil)
+)
+
+// Response types for Scope3 API
+type (
+	Scope3Response struct {
+		Data []Scope3Data `json:"data"`
+	}
+
+	Scope3Data struct {
+		Destination string          `json:"destination"`
+		Imp         []Scope3ImpData `json:"imp"`
+	}
+
+	Scope3ImpData struct {
+		ID  string     `json:"id"`
+		Ext *Scope3Ext `json:"ext,omitempty"`
+	}
+
+	Scope3Ext struct {
+		Scope3 *Scope3ExtData `json:"scope3"`
+	}
+
+	Scope3ExtData struct {
+		Segments []Scope3Segment `json:"segments"`
+	}
+
+	Scope3Segment struct {
+		ID string `json:"id"`
+	}
 )
 
 // Builder is the entry point for the module
@@ -137,10 +177,10 @@ func (m *Module) HandleEntrypointHook(
 	miCtx hookstage.ModuleInvocationContext,
 	payload hookstage.EntrypointPayload,
 ) (hookstage.HookResult[hookstage.EntrypointPayload], error) {
-	// Initialize module context with sync.Map for thread-safe segment storage
+	// Initialize module context with the async request.
 	return hookstage.HookResult[hookstage.EntrypointPayload]{
 		ModuleContext: hookstage.ModuleContext{
-			"segments": &sync.Map{},
+			asyncRequestKey: m.NewAsyncRequest(payload.Request),
 		},
 	}, nil
 }
@@ -151,54 +191,46 @@ func (m *Module) HandleRawAuctionHook(
 	miCtx hookstage.ModuleInvocationContext,
 	payload hookstage.RawAuctionRequestPayload,
 ) (hookstage.HookResult[hookstage.RawAuctionRequestPayload], error) {
-	// Parse the OpenRTB request
-	var bidRequest openrtb2.BidRequest
-	if err := jsonutil.Unmarshal(payload, &bidRequest); err != nil {
-		return hookstage.HookResult[hookstage.RawAuctionRequestPayload]{}, nil
-	}
+	var ret hookstage.HookResult[hookstage.RawAuctionRequestPayload]
+	analyticsNamePrefix := "HandleRawAuctionHook."
 
-	// Call Scope3 API
-	segments, err := m.fetchScope3Segments(ctx, &bidRequest)
-	if err != nil {
+	asyncRequest, ok := miCtx.ModuleContext[asyncRequestKey].(*AsyncRequest)
+	if !ok {
 		// Log error but don't fail the auction
-		return hookstage.HookResult[hookstage.RawAuctionRequestPayload]{
-			AnalyticsTags: hookanalytics.Analytics{
-				Activities: []hookanalytics.Activity{{
-					Name:   "scope3_fetch",
-					Status: hookanalytics.ActivityStatusError,
-					Results: []hookanalytics.Result{{
-						Status: hookanalytics.ResultStatusError,
-						Values: map[string]interface{}{"error": err.Error()},
-					}},
-				}},
-			},
-		}, nil
-	}
-
-	// Store segments in module context
-	if segmentStore, ok := miCtx.ModuleContext["segments"].(*sync.Map); ok {
-		segmentStore.Store("segments", segments)
-	}
-
-	// Store segments for later use - no mutation needed at this stage
-	changeSet := hookstage.ChangeSet[hookstage.RawAuctionRequestPayload]{}
-
-	return hookstage.HookResult[hookstage.RawAuctionRequestPayload]{
-		ChangeSet: changeSet,
-		AnalyticsTags: hookanalytics.Analytics{
+		ret.AnalyticsTags = hookanalytics.Analytics{
 			Activities: []hookanalytics.Activity{{
-				Name:   "scope3_fetch",
-				Status: hookanalytics.ActivityStatusSuccess,
+				Name:   analyticsNamePrefix + asyncRequestKey,
+				Status: hookanalytics.ActivityStatusError,
 				Results: []hookanalytics.Result{{
-					Status: hookanalytics.ResultStatusModify,
-					Values: map[string]interface{}{
-						"segments": segments,
-						"count":    len(segments),
-					},
+					Status: hookanalytics.ResultStatusError,
+					Values: map[string]interface{}{"error": "failed to get async request from module context"},
 				}},
 			}},
-		},
-	}, nil
+		}
+		return ret, nil
+	}
+
+	// Parse OpenRTB request here rather than HandleProcessedAuctionHook to get a copy to avoid parallel mutation issues
+	var bidRequest openrtb2.BidRequest
+	if err := jsonutil.Unmarshal(payload, &bidRequest); err != nil {
+		// Log error but don't fail the auction
+		ret.AnalyticsTags = hookanalytics.Analytics{
+			Activities: []hookanalytics.Activity{{
+				Name:   analyticsNamePrefix + "bidRequest.unmarshal",
+				Status: hookanalytics.ActivityStatusError,
+				Results: []hookanalytics.Result{{
+					Status: hookanalytics.ResultStatusError,
+					Values: map[string]interface{}{"error": err.Error()},
+				}},
+			}},
+		}
+		return ret, nil
+	}
+
+	// Start async request to Scope3
+	asyncRequest.fetchScope3SegmentsAsync(&bidRequest)
+
+	return ret, nil
 }
 
 // HandleAuctionResponseHook adds targeting data to the auction response
@@ -207,15 +239,50 @@ func (m *Module) HandleAuctionResponseHook(
 	miCtx hookstage.ModuleInvocationContext,
 	payload hookstage.AuctionResponsePayload,
 ) (hookstage.HookResult[hookstage.AuctionResponsePayload], error) {
-	// Retrieve segments from module context
-	var segments []string
-	if segmentStore, ok := miCtx.ModuleContext["segments"].(*sync.Map); ok {
-		if val, ok := segmentStore.Load("segments"); ok {
-			segments = val.([]string)
+	analyticsNamePrefix := "HandleAuctionResponseHook."
+	var ret hookstage.HookResult[hookstage.AuctionResponsePayload]
+	asyncRequest, ok := miCtx.ModuleContext[asyncRequestKey].(*AsyncRequest)
+	if !ok {
+		// Log error but don't fail the auction
+		ret.AnalyticsTags = hookanalytics.Analytics{
+			Activities: []hookanalytics.Activity{{
+				Name:   analyticsNamePrefix + asyncRequestKey,
+				Status: hookanalytics.ActivityStatusError,
+				Results: []hookanalytics.Result{{
+					Status: hookanalytics.ResultStatusError,
+					Values: map[string]interface{}{"error": "failed to get async request from module context"},
+				}},
+			}},
 		}
+		return ret, nil
+	}
+	// Ensure we cancel the request context always to free resources
+	defer asyncRequest.Cancel()
+
+	// Check if a reqeuest was made
+	if asyncRequest.Done == nil {
+		return ret, nil
 	}
 
-	var ret hookstage.HookResult[hookstage.AuctionResponsePayload]
+	// Wait for the async request to complete
+	<-asyncRequest.Done
+
+	// Get results
+	segments, err := asyncRequest.Segments, asyncRequest.Err
+	if err != nil {
+		// Log error but don't fail the auction
+		ret.AnalyticsTags = hookanalytics.Analytics{
+			Activities: []hookanalytics.Activity{{
+				Name:   analyticsNamePrefix + "scope3_fetch",
+				Status: hookanalytics.ActivityStatusError,
+				Results: []hookanalytics.Result{{
+					Status: hookanalytics.ResultStatusError,
+					Values: map[string]interface{}{"error": err.Error()},
+				}},
+			}},
+		}
+		return ret, nil
+	}
 
 	if len(segments) == 0 {
 		return ret, nil
@@ -230,7 +297,7 @@ func (m *Module) HandleAuctionResponseHook(
 			}
 
 			var extMap map[string]interface{}
-			if err := jsonutil.Unmarshal(payload.BidResponse.Ext, &extMap); err != nil {
+			if err = jsonutil.Unmarshal(payload.BidResponse.Ext, &extMap); err != nil {
 				extMap = make(map[string]interface{})
 			}
 
@@ -408,31 +475,4 @@ func (m *Module) createCacheKey(bidRequest *openrtb2.BidRequest) string {
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil))
-}
-
-// Response types for Scope3 API
-type Scope3Response struct {
-	Data []Scope3Data `json:"data"`
-}
-
-type Scope3Data struct {
-	Destination string          `json:"destination"`
-	Imp         []Scope3ImpData `json:"imp"`
-}
-
-type Scope3ImpData struct {
-	ID  string     `json:"id"`
-	Ext *Scope3Ext `json:"ext,omitempty"`
-}
-
-type Scope3Ext struct {
-	Scope3 *Scope3ExtData `json:"scope3"`
-}
-
-type Scope3ExtData struct {
-	Segments []Scope3Segment `json:"segments"`
-}
-
-type Scope3Segment struct {
-	ID string `json:"id"`
 }
