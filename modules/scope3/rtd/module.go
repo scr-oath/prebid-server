@@ -437,7 +437,7 @@ func (m *Module) createCacheKey(bidRequest *openrtb2.BidRequest) string {
 		var userExtension userExt
 		if err := jsonutil.Unmarshal(bidRequest.User.Ext, &userExtension); err == nil {
 			// Include LiveRamp identifiers (these are privacy-safe for caching)
-			for _, eid := range userExtension.Eids {
+			for eid := range iterutil.SlicePointerValues(userExtension.Eids) {
 				if eid.Source == "liveramp.com" && len(eid.UIDs) > 0 {
 					hasher.Write([]byte("eid:rampid:" + eid.UIDs[0].ID))
 					hasPrivacySafeID = true
