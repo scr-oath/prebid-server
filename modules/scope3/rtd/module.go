@@ -395,11 +395,11 @@ func (m *Module) fetchScope3Segments(ctx context.Context, bidRequest *openrtb2.B
 
 	// Extract unique segments (exclude destination)
 	segmentMap := make(map[string]bool)
-	for _, data := range scope3Resp.Data {
+	for data := range iterutil.SlicePointerValues(scope3Resp.Data) {
 		// Extract actual segments from impression-level data
 		for imp := range iterutil.SlicePointerValues(data.Imp) {
 			if imp.Ext != nil && imp.Ext.Scope3 != nil {
-				for _, segment := range (*imp).Ext.Scope3.Segments {
+				for segment := range iterutil.SlicePointerValues(imp.Ext.Scope3.Segments) {
 					segmentMap[segment.ID] = true
 				}
 			}
