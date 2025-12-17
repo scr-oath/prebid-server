@@ -2,6 +2,8 @@ package hookstage
 
 import (
 	"encoding/json"
+	"iter"
+	"maps"
 	"sync"
 
 	"github.com/prebid/prebid-server/v3/hooks/hookanalytics"
@@ -40,6 +42,8 @@ type ModuleContext struct {
 	sync.RWMutex
 	data map[string]any
 }
+
+var emptyMapIter = func(yield func(string, any) bool) {}
 
 // NewModuleContext creates a new module context
 func NewModuleContext() *ModuleContext {
@@ -100,4 +104,26 @@ func (mc *ModuleContext) SetAll(data map[string]any) {
 	for k, v := range data {
 		mc.data[k] = v
 	}
+}
+
+// All returns an iterator over key-value pairs from the module context with read lock held
+func (mc *ModuleContext) All() iter.Seq2[string, any] {
+	if mc == nil || mc.data == nil {
+		return emptyMapIter
+	}
+
+	mc.RLock()
+	defer mc.RUnlock()
+	return maps.All(mc.data)
+}
+
+// Insert adds the key-value pairs from seq to the module context with write lock held
+func (mc *ModuleContext) Insert(seq iter.Seq2[string, any]) {
+	if mc == nil {
+		return
+	}
+
+	mc.Lock()
+	defer mc.Unlock()
+	maps.Insert(mc.data, seq)
 }
