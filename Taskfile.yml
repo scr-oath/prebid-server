@@ -25,10 +25,13 @@ tasks:
       - "{{.UV}} run --group docs zensical serve {{.CLI_ARGS}}"
 
   docs:deploy:
-    desc: Build and force-push ./site to the gh-pages branch (ghp-import).
+    desc: Build and force-push ./site to the scr-oath remote's gh-pages branch (ghp-import).
     deps: [docs:build]
+    env:
+      # scr-oath remote is a non-default fork; ghp-import shells out to git push.
+      GIT_SSH_COMMAND: "ssh -i ~/.ssh/scr_oath2"
     cmds:
-      - "{{.UV}} run --group docs ghp-import -n -p -f site"
+      - "{{.UV}} run --group docs ghp-import -n -p -f -r scr-oath -b gh-pages site"
 
   docs:clean:
     desc: Remove generated site and zensical cache
