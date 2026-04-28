@@ -1,13 +1,12 @@
-{#-
-  This file was automatically generated - do not edit
--#}
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  {%- for page in pages -%}
-    {%- if page.canonical_url %}
       <url>
-        <loc>{{ page.canonical_url }}</loc>
+        <loc>https://scr-oath.github.io/prebid-server/</loc>
       </url>
-    {%- endif -%}
-  {%- endfor %}
+      <url>
+        <loc>https://scr-oath.github.io/prebid-server/reports/</loc>
+      </url>
+      <url>
+        <loc>https://scr-oath.github.io/prebid-server/reports/sonic/</loc>
+      </url>
 </urlset>
