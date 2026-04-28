@@ -1,0 +1,53 @@
+# Zensical config for the prebid-server documentation site.
+# Build with `task docs:build`; preview with `task docs:serve`;
+# deploy with `task docs:deploy` (force-pushes ./site to gh-pages).
+#
+# This is a fork-local docs site. It is NOT canonical prebid-server
+# documentation — its primary purpose is to publish reports such as
+# the sonic JSON evaluation under /reports/sonic/.
+
+[project]
+site_name = "prebid-server reports"
+site_description = "Performance evaluations and engineering reports for prebid-server (fork-local)."
+site_author = "Yahoo PBS team"
+site_url = "https://scr-oath.github.io/prebid-server/"
+
+repo_url = "https://github.com/scr-oath/prebid-server"
+repo_name = "scr-oath/prebid-server"
+edit_uri = "edit/scr_yahoo/sonic-eval/docs"
+
+copyright = """
+Forked from <a href="https://github.com/prebid/prebid-server">prebid/prebid-server</a> &mdash; Apache 2.0.
+"""
+
+nav = [
+    { "Overview" = "index.md" },
+    { "Reports" = [
+        { "Reports index" = "reports/index.md" },
+        { "Sonic JSON evaluation" = "reports/sonic/index.md" },
+    ] },
+]
+
+[project.theme]
+language = "en"
+features = [
+    "content.action.edit",
+    "content.code.copy",
+    "navigation.sections",
+    "navigation.top",
+    "toc.follow",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+primary = "indigo"
+accent = "deep-purple"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+primary = "indigo"
+accent = "deep-purple"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"

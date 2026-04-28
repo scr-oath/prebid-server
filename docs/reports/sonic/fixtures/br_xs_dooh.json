@@ -1,0 +1,1 @@
+{"id":"some-request-id","dooh":{"id":"12345"},"imp":[{"id":"some-impression-id","banner":{"format":[{"w":1920,"h":1080}]},"ext":{"appnexus":{"placementId":12883451}}}],"tmax":500,"ext":{}}

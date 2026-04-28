@@ -54,3 +54,14 @@ prebid-server.iml
 *~
 *.swp
 *.swo
+
+# zensical / docs site (fork-local — see Taskfile.yml)
+.venv/
+.cache/
+/site/
+__pycache__/
+*.egg-info/
+uv.lock
+
+# bench module artifacts
+/docs/reports/sonic/bench/render

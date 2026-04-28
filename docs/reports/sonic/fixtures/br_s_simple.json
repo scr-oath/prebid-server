@@ -1,0 +1,1 @@
+{"id":"some-request-id","site":{"page":"prebid.org"},"imp":[{"id":"some-impression-id","banner":{"format":[{"w":300,"h":250},{"w":300,"h":600}]},"ext":{"appnexus":{"placementId":12883451}}}],"tmax":500,"ext":{}}

@@ -1,0 +1,15 @@
+[project]
+name = "prebid-server-docs"
+version = "0.0.1"
+description = "Documentation site harness for prebid-server (zensical + ghp-import)."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Sheridan Rawlins", email = "scr@yahooinc.com" }]
+# This pyproject only exists to drive the zensical-based docs site.
+# It is not a build target for the Go server.
+
+[dependency-groups]
+docs = [
+    "zensical",
+    "ghp-import",
+]

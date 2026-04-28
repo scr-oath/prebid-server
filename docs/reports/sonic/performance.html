@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sonic vs jsoniter — JSON benchmarks for prebid-server</title>
+<style>
+:root {
+  --fg: #1b1b1b;
+  --muted: #555;
+  --bg: #fdfdfd;
+  --accent: #1f6feb;
+  --rule: #d8d8d8;
+  --code-bg: #f5f5f7;
+  --callout-bg: #f0f6ff;
+  --callout-border: #b9d2f5;
+  --good: #137333;
+  --bad: #b3261e;
+  --neutral: #555;
+}
+html { font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+body { max-width: 1080px; margin: 2rem auto; padding: 0 1.2rem 4rem; }
+.back { display: inline-block; margin-bottom: 1rem; color: var(--accent); border: 1px solid var(--accent); padding: 4px 10px; border-radius: 4px; text-decoration: none; font-size: 0.9rem; }
+.back:hover { background: var(--accent); color: white; }
+h1 { font-size: 2rem; line-height: 1.2; margin-bottom: 0.2rem; }
+h2 { margin-top: 2.4rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+h3 { margin-top: 1.4rem; }
+.byline { color: var(--muted); margin-top: 0; font-size: 0.95rem; }
+.tldr { background: var(--callout-bg); border: 1px solid var(--callout-border); border-radius: 6px; padding: 0.9rem 1.1rem; margin: 1rem 0 1.6rem; }
+.tldr p { margin: 0.4rem 0; }
+.tldr strong { color: var(--accent); }
+code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 0.9em; }
+pre { background: var(--code-bg); padding: 0.8rem 1.1rem; border-radius: 6px; overflow-x: auto; font-size: 0.85em; line-height: 1.5; border: 1px solid var(--rule); }
+table { border-collapse: collapse; width: 100%; font-size: 0.88em; margin: 0.6rem 0 1.4rem; }
+th, td { text-align: left; padding: 0.45rem 0.65rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace; }
+th { background: var(--code-bg); font-weight: 600; }
+tr:hover { background: var(--callout-bg); }
+.speed-good { color: var(--good); font-weight: 600; }
+.speed-bad { color: var(--bad); font-weight: 600; }
+.speed-neutral { color: var(--neutral); }
+.controls { display: flex; gap: 0.6rem; align-items: center; margin: 0.6rem 0 1rem; flex-wrap: wrap; }
+.controls label { font-weight: 600; color: var(--muted); font-size: 0.9em; }
+.controls select { padding: 0.3rem 0.5rem; border: 1px solid var(--rule); border-radius: 4px; font-size: 0.9em; background: white; }
+.chart-wrap { width: 100%; max-width: 1000px; height: 380px; margin: 0.6rem 0 1.6rem; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.8rem; font-size: 0.85em; margin: 0.4rem 0 1rem; }
+.legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
+.note { background: #fffaf0; border-left: 3px solid #d6c08a; padding: 0.5rem 0.9rem; margin: 0.8rem 0; font-size: 0.92em; color: #443; }
+.fixture-meta { color: var(--muted); font-size: 0.85em; margin-bottom: 0.5rem; }
+footer { color: var(--muted); font-size: 0.85em; margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+</style>
+</head>
+<body>
+
+<a class="back" href="./">&larr; back to sonic decision report</a>
+
+<h1>Sonic vs jsoniter — JSON benchmarks for prebid-server</h1>
+<p class="byline">Benchmark suite for <a href="https://github.com/prebid/prebid-server/issues/3437">issue #3437</a>, comparing <code>encoding/json</code>, <code>github.com/json-iterator/go</code>, and <code>github.com/bytedance/sonic</code> on real prebid-server fixtures.</p>
+
+<div class="tldr">
+<p><strong>Why this matters:</strong> on the largest fixture (a 48 KB <code>BidResponse</code>), <code>sonic/default</code> is <strong>~9× faster</strong> than today's <code>jsoniter</code> path on <code>RoundTrip</code> and uses <strong>~half the allocations</strong>. On the smallest (188 B <code>BidRequest</code>) the gap shrinks to ~1.3×.</p>
+<p><strong>The bottom line:</strong> sonic is a real win on response-shaped payloads (large, deeply nested, lots of seatbids) and a marginal win on small request-shaped payloads. Whether that justifies migration cost depends on the answers in <a href="./">the decision report</a>.</p>
+</div>
+
+<h2>How to read this</h2>
+<p>Numbers below come from <code>go test -bench=. -benchmem -benchtime=1s -count=2</code> on the fixtures committed under <code>fixtures/</code>. The <em>median</em> of the two runs is shown. Speedup is relative to <code>jsoniter/validation-off</code> (the lenient profile that drives most of prebid-server's adapter and exchange code via <code>jsonutil.Unmarshal</code>).</p>
+<ul>
+  <li><strong>Unmarshal</strong> — bytes to Go struct (the entry-point path for /openrtb2/auction).</li>
+  <li><strong>Marshal</strong> — Go struct to bytes (the response path, plus adapter request bodies).</li>
+  <li><strong>RoundTrip</strong> — unmarshal then re-marshal back. Closest to the real per-request cost.</li>
+</ul>
+
+<h2>Setup</h2>
+<div id="setup"></div>
+
+<h2>Headline: speedup vs <code>jsoniter/validation-off</code></h2>
+<p>Y-axis is multiple of throughput. <strong>Higher is better.</strong> Bars at 1.0 mean "same as jsoniter today." Notice the cliff between small fixtures and large ones — sonic's JIT amortizes over more bytes.</p>
+
+<div class="controls">
+  <label for="bench-pick">benchmark</label>
+  <select id="bench-pick">
+    <option>RoundTrip</option>
+    <option>Unmarshal</option>
+    <option>Marshal</option>
+  </select>
+</div>
+
+<canvas id="speedup-chart" class="chart-wrap"></canvas>
+<div class="legend" id="speedup-legend"></div>
+
+<h2>Allocations (lower is better)</h2>
+<p>Sonic's lower allocation count translates to less GC pressure under load. For the 48 KB response, sonic does ~15 allocs vs jsoniter's ~85 — that's a 5× reduction in garbage created per request.</p>
+<canvas id="allocs-chart" class="chart-wrap"></canvas>
+
+<h2>Full results</h2>
+<p>One section per benchmark, one row per fixture × codec.</p>
+<div id="tables"></div>
+
+<h2>Notes &amp; caveats</h2>
+<ul>
+  <li><strong>Hardware:</strong> measurements were taken on Apple M4 Pro (arm64) — sonic now supports arm64 well, contradicting the "<em>no ARM support</em>" comment in <a href="https://github.com/prebid/prebid-server/issues/3437">issue #3437</a>. Linux/x86_64 numbers will differ; the same harness can be re-run there.</li>
+  <li><strong>Compiler version impact:</strong> sonic's JIT optimizations apply on Go 1.18+ for amd64 and 1.20+ for arm64. Anything below falls back to <code>encoding/json</code>.</li>
+  <li><strong>The "merge-clone" path</strong> (the jsoniter extension prebid-server registers in <code>util/jsonutil/merge.go</code>) does <em>not</em> have a sonic equivalent. The bench includes it for fairness — if a sonic migration ships, that codepath would have to be re-implemented.</li>
+  <li><strong>Custom encoders</strong> — prebid-server's <code>RawMessageExtension</code> compacts every <code>json.RawMessage</code> on encode; sonic doesn't expose <code>jsoniter.ValEncoder</code>, so the equivalent must be either upstream-compacted (one-time) or handled by replacing the type.</li>
+  <li><strong>First-call cost:</strong> sonic's JIT pays a Pretouch penalty on the first encode/decode of an unseen type. The bench's <code>ResetTimer()</code> after a warm-up loop hides this; in production it's a 1-shot per type per process.</li>
+  <li><strong>Variance:</strong> count=2 means the spread between min and max is reported in the JSON but not the tables. For a real go/no-go decision, run with <code>count=10</code> on the target deployment platform.</li>
+</ul>
+
+<footer>
+  <p>Generated <span id="generated-at"></span> from <code>performance-data.json</code>. Source: <code>docs/reports/sonic/bench/</code>. Run yourself: <code>cd docs/reports/sonic/bench &amp;&amp; go test -bench=. -benchmem -count=2 -run='^$' ./...</code>.</p>
+</footer>
+
+<script>
+const codecOrder = [
+  "encoding/json",
+  "jsoniter/std-compat",
+  "jsoniter/validation-off",
+  "jsoniter/merge-clone",
+  "sonic/std",
+  "sonic/default",
+  "sonic/fastest",
+];
+const codecColor = {
+  "encoding/json":          "#888",
+  "jsoniter/std-compat":    "#9c6ade",
+  "jsoniter/validation-off":"#7c4dff",
+  "jsoniter/merge-clone":   "#5e35b1",
+  "sonic/std":              "#1f6feb",
+  "sonic/default":          "#137333",
+  "sonic/fastest":          "#0a8754",
+};
+const fixtureOrder = [
+  ["br_xs_dooh.json",        "XS BidRequest (188 B, DOOH)"],
+  ["br_s_simple.json",       "S BidRequest (211 B, simple banner)"],
+  ["br_l_2.6-downconvert.json", "L BidRequest (702 B, 2.6→2.5)"],
+  ["br_m_all-ext.json",      "M BidRequest (916 B, all extensions)"],
+  ["br_xl_30imps.json",      "XL BidRequest (7 KB, 30 imps synth)"],
+  ["bresp_s_typical.json",   "S BidResponse (293 B, typical adapter)"],
+  ["bresp_xl_silverpush.json","XL BidResponse (48 KB, video)"],
+];
+
+let DATA = null;
+
+async function load() {
+  const r = await fetch('./performance-data.json');
+  DATA = await r.json();
+  document.getElementById('generated-at').textContent = DATA.generated_at;
+  renderSetup();
+  renderTables();
+  renderSpeedup();
+  renderAllocs();
+}
+
+function renderSetup() {
+  const el = document.getElementById('setup');
+  el.innerHTML = `
+    <pre>goos:        ${DATA.goos}
+goarch:      ${DATA.goarch}
+cpu:         ${DATA.cpu}
+package:     ${DATA.pkg}
+generated:   ${DATA.generated_at}</pre>`;
+}
+
+function summariesFor(bench) {
+  return DATA.summaries.filter(s => s.benchmark === bench);
+}
+function summaryFor(bench, fixture, codec) {
+  return DATA.summaries.find(s => s.benchmark===bench && s.fixture===fixture && s.codec===codec);
+}
+
+function renderTables() {
+  const root = document.getElementById('tables');
+  root.innerHTML = '';
+  for (const bench of ['RoundTrip', 'Unmarshal', 'Marshal']) {
+    const h = document.createElement('h3');
+    h.textContent = `${bench} — median over runs`;
+    root.appendChild(h);
+    for (const [fx, label] of fixtureOrder) {
+      const rows = summariesFor(bench).filter(s => s.fixture === fx);
+      if (rows.length === 0) continue;
+      const baseline = rows.find(s => s.codec === "jsoniter/validation-off");
+      const baselineNs = baseline ? baseline.ns_per_op_med : null;
+      const wrap = document.createElement('div');
+      const header = document.createElement('div');
+      header.className = 'fixture-meta';
+      header.innerHTML = `<strong>${label}</strong> &nbsp; <code>${fx}</code>`;
+      wrap.appendChild(header);
+      const t = document.createElement('table');
+      t.innerHTML = `
+        <thead><tr>
+          <th>codec</th>
+          <th class="num">ns/op</th>
+          <th class="num">MB/s</th>
+          <th class="num">B/op</th>
+          <th class="num">allocs/op</th>
+          <th class="num">vs jsoniter</th>
+        </tr></thead>
+        <tbody>${
+          codecOrder.map(c => {
+            const r = rows.find(s => s.codec === c);
+            if (!r) return '';
+            const ratio = baselineNs ? (baselineNs / r.ns_per_op_med) : null;
+            const ratioCell = ratio !== null
+              ? `<span class="${ratio > 1.05 ? 'speed-good' : ratio < 0.95 ? 'speed-bad' : 'speed-neutral'}">${ratio.toFixed(2)}×</span>`
+              : '';
+            return `<tr>
+              <td><code>${c}</code></td>
+              <td class="num">${Math.round(r.ns_per_op_med).toLocaleString()}</td>
+              <td class="num">${(r.mb_per_sec_med || 0).toFixed(1)}</td>
+              <td class="num">${(r.bytes_per_op_med || 0).toLocaleString()}</td>
+              <td class="num">${r.allocs_per_op_med || 0}</td>
+              <td class="num">${ratioCell}</td>
+            </tr>`;
+          }).join('')
+        }</tbody>`;
+      wrap.appendChild(t);
+      root.appendChild(wrap);
+    }
+  }
+}
+
+// Minimal canvas-based grouped bar chart — no external dep.
+function drawGroupedBars(canvasId, groups, codecs, valueFn, opts) {
+  const cv = document.getElementById(canvasId);
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+  ctx.font = "12px ui-sans-serif, system-ui, sans-serif";
+
+  const padL = 60, padR = 16, padT = 14, padB = 80;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  // determine max
+  let maxV = 0;
+  for (const g of groups) for (const c of codecs) {
+    const v = valueFn(g, c);
+    if (Number.isFinite(v) && v > maxV) maxV = v;
+  }
+  if (opts && opts.minMax) maxV = Math.max(maxV, opts.minMax);
+  if (maxV === 0) maxV = 1;
+  // round up to nice number
+  const nice = (x) => {
+    const exp = Math.pow(10, Math.floor(Math.log10(x)));
+    const f = x / exp;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * exp;
+  };
+  maxV = nice(maxV);
+
+  // y-axis baseline marker
+  if (opts && opts.baselineAt) {
+    const y = padT + plotH - (opts.baselineAt / maxV) * plotH;
+    ctx.strokeStyle = "#999";
+    ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W-padR, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#666";
+    ctx.fillText(`${opts.baselineLabel || 'baseline'}`, W - padR - 80, y - 4);
+  }
+
+  // y-axis ticks
+  ctx.fillStyle = "#444";
+  ctx.strokeStyle = "#ddd";
+  for (let i=0; i<=5; i++) {
+    const v = (maxV * i / 5);
+    const y = padT + plotH - (i/5) * plotH;
+    ctx.fillText((opts && opts.yFormatter ? opts.yFormatter(v) : v.toFixed(1)), 4, y+4);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W-padR, y); ctx.stroke();
+  }
+
+  const groupW = plotW / groups.length;
+  const barInner = (groupW * 0.85) / codecs.length;
+  for (let gi=0; gi<groups.length; gi++) {
+    const g = groups[gi];
+    const x0 = padL + gi * groupW + groupW * 0.075;
+    // group label
+    ctx.save();
+    ctx.translate(x0 + groupW*0.4, padT + plotH + 8);
+    ctx.rotate(-0.45);
+    ctx.fillStyle = "#222";
+    ctx.fillText(g.label, 0, 0);
+    ctx.restore();
+    for (let ci=0; ci<codecs.length; ci++) {
+      const c = codecs[ci];
+      const v = valueFn(g, c);
+      if (!Number.isFinite(v)) continue;
+      const barH = (v / maxV) * plotH;
+      const x = x0 + ci * barInner;
+      const y = padT + plotH - barH;
+      ctx.fillStyle = codecColor[c] || "#555";
+      ctx.fillRect(x, y, barInner * 0.85, barH);
+    }
+  }
+}
+
+function renderSpeedup() {
+  const select = document.getElementById('bench-pick');
+  const draw = () => {
+    const bench = select.value;
+    const groups = fixtureOrder.map(([fx, label]) => ({fx, label}));
+    drawGroupedBars('speedup-chart', groups, codecOrder,
+      (g, c) => {
+        const r = summaryFor(bench, g.fx, c);
+        const base = summaryFor(bench, g.fx, "jsoniter/validation-off");
+        if (!r || !base) return null;
+        return base.ns_per_op_med / r.ns_per_op_med;
+      },
+      { baselineAt: 1.0, baselineLabel: '1× (jsoniter today)', yFormatter: v => v.toFixed(1)+'×' }
+    );
+    renderLegend();
+  };
+  select.addEventListener('change', draw);
+  draw();
+  window.addEventListener('resize', draw);
+}
+
+function renderAllocs() {
+  const groups = fixtureOrder.map(([fx, label]) => ({fx, label}));
+  const draw = () => drawGroupedBars('allocs-chart', groups, codecOrder,
+    (g, c) => {
+      const r = summaryFor('RoundTrip', g.fx, c);
+      return r ? r.allocs_per_op_med : null;
+    },
+    { yFormatter: v => Math.round(v).toString() }
+  );
+  draw();
+  window.addEventListener('resize', draw);
+}
+
+function renderLegend() {
+  const lg = document.getElementById('speedup-legend');
+  lg.innerHTML = codecOrder.map(c =>
+    `<span><i style="background:${codecColor[c]}"></i><code>${c}</code></span>`
+  ).join('');
+}
+
+load();
+</script>
+
+</body>
+</html>

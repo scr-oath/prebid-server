@@ -1,0 +1,36 @@
+version: "3"
+
+# Tasks for the prebid-server fork-local documentation site.
+# Mirrors the LangGraphTinker layout so muscle memory transfers.
+
+vars:
+  UV: uv
+
+tasks:
+  sync:docs:
+    desc: Install docs deps (zensical + ghp-import) into .venv
+    cmds:
+      - "{{.UV}} sync --group docs"
+
+  docs:build:
+    desc: Render docs from ./docs to ./site
+    deps: [sync:docs]
+    cmds:
+      - "{{.UV}} run --group docs zensical build {{.CLI_ARGS}}"
+
+  docs:serve:
+    desc: Live-preview docs at http://localhost:8000
+    deps: [sync:docs]
+    cmds:
+      - "{{.UV}} run --group docs zensical serve {{.CLI_ARGS}}"
+
+  docs:deploy:
+    desc: Build and force-push ./site to the gh-pages branch (ghp-import).
+    deps: [docs:build]
+    cmds:
+      - "{{.UV}} run --group docs ghp-import -n -p -f site"
+
+  docs:clean:
+    desc: Remove generated site and zensical cache
+    cmds:
+      - rm -rf site .cache
